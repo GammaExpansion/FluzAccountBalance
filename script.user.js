@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      1.0.3
+// @version      1.0.4
 // @description  Show Fluz Bank Balance
 // @author       GammaExpansion
 // @match        https://fluz.app/manage-money*
