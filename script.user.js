@@ -11,7 +11,7 @@
 // @grant        GM_addElement
 // @icon         https://fluz.099.im/favicon.png
 // @downloadURL  https://raw.githubusercontent.com/GammaExpansion/FluzAccountBalance/main/script.user.js
-// @updateURL    https://raw.githubusercontent.com/GammaExpansion/FluzAccountBalance/main/script.meta.js
+// @updateURL    https://raw.githubusercontent.com/GammaExpansion/FluzAccountBalance/main/script.user.js
 // @run-at       document-end
 // @license      MIT
 // ==/UserScript==
