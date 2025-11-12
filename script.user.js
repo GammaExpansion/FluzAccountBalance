@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      1.6.2
+// @version      1.7.0
 // @description  Show Fluz Bank Balance in table and dropdown
 // @author       GammaExpansion
 // @match        https://fluz.app/manage-money*
@@ -63,6 +63,46 @@
     }
 
     /**
+    * LocalStorage key for table expansion state.
+    */
+    const STORAGE_KEY = 'fluz_account_table_expanded';
+
+    /**
+    * Gets the saved expansion state from localStorage.
+    * @returns {boolean} - True if expanded, false if collapsed. Defaults to true.
+    */
+    function getExpansionState() {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        return saved === null ? true : saved === 'true';
+    }
+
+    /**
+    * Saves the expansion state to localStorage.
+    * @param {boolean} isExpanded - Whether the table is expanded.
+    */
+    function setExpansionState(isExpanded) {
+        localStorage.setItem(STORAGE_KEY, isExpanded.toString());
+    }
+
+    /**
+    * Toggles the expansion state of the account table.
+    */
+    function toggleAccountTable() {
+        const content = document.getElementById('fluz-account-content');
+        const icon = document.getElementById('fluz-expand-icon');
+
+        if (!content || !icon) return;
+
+        const isCurrentlyExpanded = content.style.display !== 'none';
+        const newState = !isCurrentlyExpanded;
+
+        content.style.display = newState ? 'flex' : 'none';
+        icon.textContent = newState ? '▼' : '▶';
+
+        setExpansionState(newState);
+    }
+
+    /**
     * Adds balance information to dropdown menu options.
     * @param {Array} accountData - The array of account objects with balance info.
     */
@@ -111,11 +151,20 @@
     /**
     * Takes the account data and returns card-based HTML for narrow layouts.
     * @param {Array} data - The array of account objects.
+    * @param {boolean} isExpanded - Whether the table should be expanded initially.
     * @returns {string} - The HTML string.
     */
-    function createAccountTableHtml(data) {
-        let htmlString = '<h3 style="margin: 16px 0 10px 0; font-size: 18px; font-weight: 600;">Account Summary</h3>';
-        htmlString += '<div style="display: flex; flex-direction: column; gap: 8px;">';
+    function createAccountTableHtml(data, isExpanded) {
+        const arrowIcon = isExpanded ? '▼' : '▶';
+        const contentDisplay = isExpanded ? 'flex' : 'none';
+
+        let htmlString = `
+            <div id="fluz-account-header" style="display: flex; align-items: center; justify-content: space-between; margin: 16px 0 10px 0; cursor: pointer; user-select: none; padding: 8px; border-radius: 6px; transition: background-color 0.2s;">
+                <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Account Summary</h3>
+                <span id="fluz-expand-icon" style="font-size: 14px; color: #666; transition: transform 0.2s;">${arrowIcon}</span>
+            </div>
+        `;
+        htmlString += `<div id="fluz-account-content" style="display: ${contentDisplay}; flex-direction: column; gap: 8px;">`;
 
         // Create a card for each account
         data.forEach(account => {
@@ -183,11 +232,27 @@
                 // Get funding source from React Props.
                 fundingSourceOptions = parseFundingSourceOptions(props.options);
 
+                // Get saved expansion state
+                const isExpanded = getExpansionState();
+
                 // Render table with funding options.
                 let table = document.createElement('div');
                 table.className = '_fluz_balance_sheet';
-                table.innerHTML = createAccountTableHtml(fundingSourceOptions);
+                table.innerHTML = createAccountTableHtml(fundingSourceOptions, isExpanded);
                 depositSteps.appendChild(table);
+
+                // Attach click handler to header
+                const header = document.getElementById('fluz-account-header');
+                if (header) {
+                    header.addEventListener('click', toggleAccountTable);
+                    // Add hover effect
+                    header.addEventListener('mouseenter', () => {
+                        header.style.backgroundColor = 'rgba(0, 0, 0, 0.03)';
+                    });
+                    header.addEventListener('mouseleave', () => {
+                        header.style.backgroundColor = 'transparent';
+                    });
+                }
 
             } catch (error) {
                 console.error('Userscript error:', error);
