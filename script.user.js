@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      1.7.0
-// @description  Show Fluz Bank Balance in table and dropdown
+// @version      1.9.0
+// @description  Show Fluz Bank Balance in table and dropdown with account management
 // @author       GammaExpansion
-// @match        https://fluz.app/manage-money*
+// @match        https://fluz.app/*
 // @grant        none
 // @icon         https://fluz.099.im/favicon.png
 // @downloadURL  https://raw.githubusercontent.com/GammaExpansion/FluzAccountBalance/main/script.user.js
@@ -15,6 +15,13 @@
 
 (function() {
     'use strict';
+
+    /**
+     * Checks if current URL is the manage-money page.
+     */
+    function isOnManageMoneyPage() {
+        return window.location.pathname.startsWith('/manage-money');
+    }
 
     /**
      * Finds the React props for a given DOM element.
@@ -34,6 +41,8 @@
         return options.filter(
             (option) => option.type == "BANK_ACCOUNT"
         ).flatMap((option) => ({
+            "bank_account_id": option.bank_account_id,
+            "bank_institution_auth_id": option.bank_institution_auth_id,
             "institution_name": option.bank_institution_auth.platform_institution_name,
             "name": option.name,
             "final_spend_power": option.spend_power.final_spend_power,
@@ -103,6 +112,62 @@
     }
 
     /**
+    * Removes/disconnects a bank account from Fluz.
+    * @param {string} bankInstitutionAuthId - The bank institution auth ID.
+    * @param {string} bankAccountId - The bank account ID.
+    * @param {string} accountName - The account name for confirmation dialog.
+    */
+    async function removeAccount(bankInstitutionAuthId, bankAccountId, accountName) {
+        const confirmed = confirm(`Are you sure you want to disconnect "${accountName.trim()}"?\n\nThis will remove the account from Fluz.`);
+        if (!confirmed) return;
+
+        const button = document.querySelector(`[data-account-id="${bankAccountId}"]`);
+        if (button) {
+            button.disabled = true;
+            button.textContent = '...';
+        }
+
+        try {
+            const response = await fetch(
+                `https://fluz.app/payment-methods/connected-accounts/removePlaidInstitution/${bankInstitutionAuthId}/${bankAccountId}.data`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ bankInstitutionId: bankAccountId }),
+                    credentials: 'include'
+                }
+            );
+
+            if (response.ok || response.status === 202) {
+                // Remove the card from UI
+                const card = document.getElementById(`fluz-account-card-${bankAccountId}`);
+                if (card) {
+                    card.style.transition = 'opacity 0.3s, transform 0.3s';
+                    card.style.opacity = '0';
+                    card.style.transform = 'translateX(-20px)';
+                    setTimeout(() => card.remove(), 300);
+                }
+
+                // Reload the page after a short delay to refresh data
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
+            } else {
+                throw new Error(`Failed to remove account: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Error removing account:', error);
+            alert('Failed to disconnect account. Please try again or use the Fluz app.');
+            if (button) {
+                button.disabled = false;
+                button.textContent = 'X';
+            }
+        }
+    }
+
+    /**
     * Adds balance information to dropdown menu options.
     * @param {Array} accountData - The array of account objects with balance info.
     */
@@ -169,8 +234,16 @@
         // Create a card for each account
         data.forEach(account => {
             htmlString += `
-                <div style="background: white; border-radius: 6px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border: 1px solid #E7E5E4;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                <div id="fluz-account-card-${account.bank_account_id}" style="background: white; border-radius: 6px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border: 1px solid #E7E5E4; position: relative;">
+                    <button
+                        class="fluz-remove-btn"
+                        data-account-id="${account.bank_account_id}"
+                        data-auth-id="${account.bank_institution_auth_id}"
+                        data-account-name="${account.name.replace(/"/g, '&quot;')}"
+                        style="position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid #E7E5E4; background: #fff; color: #787571; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1; transition: all 0.2s;"
+                        title="Disconnect account"
+                    >X</button>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; padding-right: 24px;">
                         <div style="font-weight: 600; font-size: 14px; color: #1A0000; line-height: 1.3;">${account.institution_name}</div>
                         <div style="font-weight: 600; font-size: 14px; color: #1A0000; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${account.name.trim()}</div>
                     </div>
@@ -202,8 +275,25 @@
 
     // Main script logic
     let fundingSourceOptions = null;
+    let lastUrl = window.location.href;
 
     const checkInterval = setInterval(() => {
+        // Detect URL changes (SPA navigation)
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            // Reset state when navigating
+            fundingSourceOptions = null;
+            const existingSheet = document.querySelector('._fluz_balance_sheet');
+            if (existingSheet) {
+                existingSheet.remove();
+            }
+        }
+
+        // Only run on manage-money page
+        if (!isOnManageMoneyPage()) {
+            return;
+        }
+
         // Safely check for required DOM elements
         const fundingWrapper = document.querySelectorAll('[class*="_funding-wrapper"]')[1];
         const depositStepsElement = document.querySelector('[class*="_prepayment-title"]');
@@ -253,6 +343,29 @@
                         header.style.backgroundColor = 'transparent';
                     });
                 }
+
+                // Attach click handlers to remove buttons
+                const removeButtons = document.querySelectorAll('.fluz-remove-btn');
+                removeButtons.forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const accountId = btn.getAttribute('data-account-id');
+                        const authId = btn.getAttribute('data-auth-id');
+                        const accountName = btn.getAttribute('data-account-name');
+                        removeAccount(authId, accountId, accountName);
+                    });
+                    // Add hover effect
+                    btn.addEventListener('mouseenter', () => {
+                        btn.style.backgroundColor = '#FEE2E2';
+                        btn.style.borderColor = '#EF4444';
+                        btn.style.color = '#EF4444';
+                    });
+                    btn.addEventListener('mouseleave', () => {
+                        btn.style.backgroundColor = '#fff';
+                        btn.style.borderColor = '#E7E5E4';
+                        btn.style.color = '#787571';
+                    });
+                });
 
             } catch (error) {
                 console.error('Userscript error:', error);
