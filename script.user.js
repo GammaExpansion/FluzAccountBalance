@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      1.9.0
+// @version      2.1.1
 // @description  Show Fluz Bank Balance in table and dropdown with account management
 // @author       GammaExpansion
 // @match        https://fluz.app/*
@@ -91,6 +91,74 @@
     */
     function setExpansionState(isExpanded) {
         localStorage.setItem(STORAGE_KEY, isExpanded.toString());
+    }
+
+    /**
+    * Opens the Add Bank Account modal by dispatching a custom event.
+    */
+    function openAddBankAccount() {
+        window.dispatchEvent(new CustomEvent('AddBankAccount', {
+            detail: { open: true, eventName: 'AddBankAccount' }
+        }));
+    }
+
+    /**
+    * Selects an account from the summary to auto-fill deposit amount and select in dropdown.
+    * @param {string} accountName - The account name to select.
+    * @param {number} finalSpendPower - The final spend power amount to fill.
+    */
+    function selectAccountForDeposit(accountName, finalSpendPower) {
+        // Step 1: Fill the deposit amount input
+        const depositInput = document.getElementById('deposit-value');
+        if (depositInput) {
+            // Format to 2 decimal places without currency symbol
+            const amountStr = finalSpendPower.toFixed(2);
+
+            // Use native setter to properly trigger React's onChange
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeInputValueSetter.call(depositInput, amountStr);
+
+            // Dispatch input event to trigger React state update
+            depositInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        // Step 2: Find the funding source dropdown and select the matching option
+        const fundingWrapper = document.querySelectorAll('[class*="_funding-wrapper"]')[1];
+        if (!fundingWrapper) return;
+
+        // Helper function to find and click matching option
+        const selectMatchingOption = () => {
+            const openDropdown = fundingWrapper.querySelector('.options.open');
+            if (!openDropdown) return false;
+
+            const options = openDropdown.querySelectorAll('.option');
+            for (const option of options) {
+                const label = option.querySelector('.content .label');
+                if (label && label.textContent.trim() === accountName) {
+                    option.click();
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Check if dropdown is already open
+        const existingDropdown = fundingWrapper.querySelector('.options.open');
+        if (existingDropdown) {
+            // Dropdown already open, select directly
+            selectMatchingOption();
+        } else {
+            // Find the selection area that toggles the dropdown (the clickable trigger)
+            const selectionArea = fundingWrapper.querySelector('[class*="_selection"]');
+            if (selectionArea) {
+                selectionArea.click();
+
+                // Wait for dropdown to open, then select the option
+                setTimeout(() => {
+                    selectMatchingOption();
+                }, 150);
+            }
+        }
     }
 
     /**
@@ -226,7 +294,12 @@
         let htmlString = `
             <div id="fluz-account-header" style="display: flex; align-items: center; justify-content: space-between; margin: 16px 0 10px 0; cursor: pointer; user-select: none; padding: 8px; border-radius: 6px; transition: background-color 0.2s;">
                 <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Account Summary</h3>
-                <span id="fluz-expand-icon" style="font-size: 14px; color: #666; transition: transform 0.2s;">${arrowIcon}</span>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <button id="fluz-add-account-btn" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px;">
+                        <span style="font-size: 14px; line-height: 1;">+</span> Add
+                    </button>
+                    <span id="fluz-expand-icon" style="font-size: 14px; color: #666; transition: transform 0.2s;">${arrowIcon}</span>
+                </div>
             </div>
         `;
         htmlString += `<div id="fluz-account-content" style="display: ${contentDisplay}; flex-direction: column; gap: 8px;">`;
@@ -234,7 +307,11 @@
         // Create a card for each account
         data.forEach(account => {
             htmlString += `
-                <div id="fluz-account-card-${account.bank_account_id}" style="background: white; border-radius: 6px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border: 1px solid #E7E5E4; position: relative;">
+                <div id="fluz-account-card-${account.bank_account_id}"
+                     class="fluz-account-card"
+                     data-account-name="${account.name.trim().replace(/"/g, '&quot;')}"
+                     data-final-spend-power="${account.final_spend_power}"
+                     style="background: white; border-radius: 6px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border: 1px solid #E7E5E4; position: relative; cursor: pointer; transition: all 0.2s;">
                     <button
                         class="fluz-remove-btn"
                         data-account-id="${account.bank_account_id}"
@@ -344,6 +421,24 @@
                     });
                 }
 
+                // Attach click handler to Add Account button
+                const addBtn = document.getElementById('fluz-add-account-btn');
+                if (addBtn) {
+                    addBtn.addEventListener('click', (e) => {
+                        e.stopPropagation(); // Don't trigger header collapse
+                        openAddBankAccount();
+                    });
+                    // Add hover effect
+                    addBtn.addEventListener('mouseenter', () => {
+                        addBtn.style.transform = 'scale(1.05)';
+                        addBtn.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.3)';
+                    });
+                    addBtn.addEventListener('mouseleave', () => {
+                        addBtn.style.transform = 'scale(1)';
+                        addBtn.style.boxShadow = 'none';
+                    });
+                }
+
                 // Attach click handlers to remove buttons
                 const removeButtons = document.querySelectorAll('.fluz-remove-btn');
                 removeButtons.forEach(btn => {
@@ -364,6 +459,28 @@
                         btn.style.backgroundColor = '#fff';
                         btn.style.borderColor = '#E7E5E4';
                         btn.style.color = '#787571';
+                    });
+                });
+
+                // Attach click handlers to account cards for auto-fill
+                const accountCards = document.querySelectorAll('.fluz-account-card');
+                accountCards.forEach(card => {
+                    card.addEventListener('click', (e) => {
+                        // Don't trigger if clicking the remove button
+                        if (e.target.closest('.fluz-remove-btn')) return;
+
+                        const accountName = card.getAttribute('data-account-name');
+                        const finalSpendPower = parseFloat(card.getAttribute('data-final-spend-power'));
+                        selectAccountForDeposit(accountName, finalSpendPower);
+                    });
+                    // Add hover effect
+                    card.addEventListener('mouseenter', () => {
+                        card.style.borderColor = '#10B981';
+                        card.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
+                    });
+                    card.addEventListener('mouseleave', () => {
+                        card.style.borderColor = '#E7E5E4';
+                        card.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)';
                     });
                 });
 
