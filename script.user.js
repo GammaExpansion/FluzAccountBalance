@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      1.8.0
+// @version      1.9.0
 // @description  Show Fluz Bank Balance in table and dropdown with account management
 // @author       GammaExpansion
-// @match        https://fluz.app/manage-money*
+// @match        https://fluz.app/*
 // @grant        none
 // @icon         https://fluz.099.im/favicon.png
 // @downloadURL  https://raw.githubusercontent.com/GammaExpansion/FluzAccountBalance/main/script.user.js
@@ -15,6 +15,13 @@
 
 (function() {
     'use strict';
+
+    /**
+     * Checks if current URL is the manage-money page.
+     */
+    function isOnManageMoneyPage() {
+        return window.location.pathname.startsWith('/manage-money');
+    }
 
     /**
      * Finds the React props for a given DOM element.
@@ -268,8 +275,25 @@
 
     // Main script logic
     let fundingSourceOptions = null;
+    let lastUrl = window.location.href;
 
     const checkInterval = setInterval(() => {
+        // Detect URL changes (SPA navigation)
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            // Reset state when navigating
+            fundingSourceOptions = null;
+            const existingSheet = document.querySelector('._fluz_balance_sheet');
+            if (existingSheet) {
+                existingSheet.remove();
+            }
+        }
+
+        // Only run on manage-money page
+        if (!isOnManageMoneyPage()) {
+            return;
+        }
+
         // Safely check for required DOM elements
         const fundingWrapper = document.querySelectorAll('[class*="_funding-wrapper"]')[1];
         const depositStepsElement = document.querySelector('[class*="_prepayment-title"]');
