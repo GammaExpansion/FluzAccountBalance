@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      2.1.1
-// @description  Show Fluz Bank Balance in table and dropdown with account management
+// @version      2.2.6
+// @description  Show Fluz Bank Balance in table and dropdown with account management and deposit presets
 // @author       GammaExpansion
 // @match        https://fluz.app/*
 // @grant        none
@@ -75,6 +75,723 @@
     * LocalStorage key for table expansion state.
     */
     const STORAGE_KEY = 'fluz_account_table_expanded';
+
+    /**
+    * LocalStorage key for saved deposit presets.
+    */
+    const PRESETS_STORAGE_KEY = 'fluz_deposit_presets';
+
+    /**
+    * Gets saved presets from localStorage.
+    * @returns {Array} - Array of preset objects.
+    */
+    function getPresets() {
+        try {
+            const saved = localStorage.getItem(PRESETS_STORAGE_KEY);
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error('Error loading presets:', e);
+            return [];
+        }
+    }
+
+    /**
+    * Saves presets to localStorage.
+    * @param {Array} presets - Array of preset objects.
+    */
+    function savePresets(presets) {
+        try {
+            localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+        } catch (e) {
+            console.error('Error saving presets:', e);
+        }
+    }
+
+    /**
+    * Adds a new preset.
+    * @param {Object} preset - The preset object to add.
+    */
+    function addPreset(preset) {
+        const presets = getPresets();
+        preset.id = Date.now().toString();
+        presets.push(preset);
+        savePresets(presets);
+        return preset;
+    }
+
+    /**
+    * Deletes a preset by ID.
+    * @param {string} presetId - The preset ID to delete.
+    */
+    function deletePreset(presetId) {
+        const presets = getPresets().filter(p => p.id !== presetId);
+        savePresets(presets);
+    }
+
+    /**
+    * Gets the selected option text from a funding source dropdown.
+    * @param {Element} wrapper - The funding wrapper element.
+    * @returns {string} - The selected option text or empty string.
+    */
+    function getSelectedOptionText(wrapper) {
+        if (!wrapper) return '';
+
+        // Try multiple selectors to find the label text
+        const selectors = [
+            '._selected-option-container_14f6y_280 .label',
+            '._selected-option-container_14f6y_280 ._title_1ucsv_126',
+            '._selected-option-container_14f6y_280 [class*="_list-item-title"]',
+            '._selected-option-container_14f6y_280 [class*="_title"]',
+            '[class*="_selected-option"] .label',
+            '[class*="_selected-option"] [class*="_title"]'
+        ];
+
+        for (const selector of selectors) {
+            const element = wrapper.querySelector(selector);
+            if (element && element.textContent.trim()) {
+                return element.textContent.trim();
+            }
+        }
+
+        return '';
+    }
+
+    /**
+    * Gets the selected category from the gift card category dropdown.
+    * @returns {string} - The selected category text or empty string.
+    */
+    function getSelectedCategory() {
+        // Category dropdown is in _category-margin wrapper, not _funding-wrapper
+        const categoryWrapper = document.querySelector('[class*="_category-margin"]');
+        if (!categoryWrapper) return '';
+
+        // The selected value is in an input with type="button"
+        const input = categoryWrapper.querySelector('input[type="button"]');
+        if (input && input.value && input.value !== 'Any category') {
+            return input.value;
+        }
+
+        return '';
+    }
+
+    /**
+    * Captures the current form state as a preset object.
+    * @returns {Object|null} - The preset object or null if form not found.
+    */
+    function captureCurrentFormState() {
+        const depositInput = document.getElementById('deposit-value');
+        const quantityInput = document.getElementById('deposit-quantity');
+
+        if (!depositInput) return null;
+
+        // Get all funding wrappers
+        const fundingWrappers = document.querySelectorAll('[class*="_funding-wrapper"]');
+
+        // Get destination (Move money to) - first funding wrapper
+        const destinationText = getSelectedOptionText(fundingWrappers[0]);
+
+        // Get funding source (Move money from) - second funding wrapper
+        const fundingSource = getSelectedOptionText(fundingWrappers[1]);
+
+        // Get gift card category - separate dropdown with _category-margin class
+        const giftCardCategory = getSelectedCategory();
+
+        return {
+            amount: depositInput.value || '',
+            quantity: quantityInput ? quantityInput.value : '1',
+            destination: destinationText,
+            fundingSource: fundingSource,
+            giftCardCategory: giftCardCategory
+        };
+    }
+
+    /**
+    * Sets an input value using native setter to trigger React updates.
+    * @param {HTMLInputElement} input - The input element.
+    * @param {string} value - The value to set.
+    */
+    function setInputValue(input, value) {
+        if (!input) return;
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeInputValueSetter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    /**
+    * Applies a preset to the form.
+    * Sequences operations with delays since fields appear dynamically:
+    * - Quantity appears after selecting prepayment destination
+    * - Gift card category appears after selecting funding source
+    * @param {Object} preset - The preset to apply.
+    */
+    function applyPreset(preset) {
+        // Step 1: Select destination (Move money to)
+        const fundingWrappers = document.querySelectorAll('[class*="_funding-wrapper"]');
+        if (fundingWrappers[0] && preset.destination) {
+            selectDropdownOption(fundingWrappers[0], preset.destination, false);
+        }
+
+        // Step 2: After destination is selected, select funding source
+        setTimeout(() => {
+            const fundingWrappers2 = document.querySelectorAll('[class*="_funding-wrapper"]');
+            if (fundingWrappers2[1] && preset.fundingSource) {
+                selectDropdownOption(fundingWrappers2[1], preset.fundingSource, false);
+            }
+
+            // Step 3: After funding source is selected, category dropdown appears
+            // Fill amount, quantity, and select category
+            setTimeout(() => {
+                // Fill the deposit amount
+                const depositInput = document.getElementById('deposit-value');
+                if (depositInput && preset.amount) {
+                    setInputValue(depositInput, preset.amount);
+                }
+
+                // Fill the quantity (only exists for prepayment mode)
+                const quantityInput = document.getElementById('deposit-quantity');
+                if (quantityInput && preset.quantity) {
+                    setInputValue(quantityInput, preset.quantity);
+                }
+
+                // Select gift card category (separate dropdown with _category-margin class)
+                if (preset.giftCardCategory) {
+                    const categoryWrapper = document.querySelector('[class*="_category-margin"]');
+                    if (categoryWrapper) {
+                        selectDropdownOption(categoryWrapper, preset.giftCardCategory, false);
+                    }
+                }
+            }, 500);
+        }, 400);
+    }
+
+    /**
+    * Gets label text from a dropdown option element.
+    * @param {Element} option - The option element.
+    * @returns {string} - The label text.
+    */
+    function getOptionLabelText(option) {
+        // Try multiple selectors for the label
+        const labelSelectors = [
+            '.content .label',
+            '.label',
+            '[class*="_list-item-title"]',
+            '[class*="_title"]'
+        ];
+
+        for (const selector of labelSelectors) {
+            const label = option.querySelector(selector);
+            if (label && label.textContent.trim()) {
+                return label.textContent.trim();
+            }
+        }
+        return '';
+    }
+
+    /**
+    * Helper to select an option from a dropdown.
+    * Handles both funding source dropdowns (.options.open) and category dropdowns (.dropdown.open > .options.open)
+    * @param {Element} wrapper - The dropdown wrapper element.
+    * @param {string} searchText - Text to match in the option label.
+    * @param {boolean} partialMatch - Whether to use partial matching.
+    */
+    function selectDropdownOption(wrapper, searchText, partialMatch) {
+        const selectMatchingOption = () => {
+            // Category dropdown structure: .dropdown.open > .options.open > .option
+            // Funding dropdown structure: .options.open > .option
+            // Try to find the options container in either structure
+            let openDropdown = wrapper.querySelector('.options.open');
+            if (!openDropdown) {
+                // Fallback: check if .dropdown.open contains .options
+                const dropdownOpen = wrapper.querySelector('.dropdown.open');
+                if (dropdownOpen) {
+                    openDropdown = dropdownOpen.querySelector('.options') || dropdownOpen;
+                }
+            }
+            if (!openDropdown) return false;
+
+            // Options have class .option and/or role="menuitem"
+            const options = openDropdown.querySelectorAll('.option, [role="menuitem"]');
+
+            for (const option of options) {
+                const labelText = getOptionLabelText(option);
+                if (labelText) {
+                    const matches = partialMatch
+                        ? labelText.toLowerCase().includes(searchText.toLowerCase())
+                        : labelText === searchText;
+                    if (matches) {
+                        option.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        // Check if dropdown is already open
+        let existingDropdown = wrapper.querySelector('.options.open, .dropdown.open');
+        if (existingDropdown) {
+            selectMatchingOption();
+        } else {
+            // Find the trigger element - can be _selection or an input button
+            let trigger = wrapper.querySelector('[class*="_selection"]');
+            if (!trigger) {
+                trigger = wrapper.querySelector('input[type="button"]');
+            }
+            if (trigger) {
+                trigger.click();
+                // Give more time for category dropdown animation
+                setTimeout(() => {
+                    selectMatchingOption();
+                }, 200);
+            }
+        }
+    }
+
+    /**
+    * Creates the preset bar HTML.
+    * @returns {string} - The HTML string for the preset bar.
+    */
+    function createPresetBarHtml() {
+        const presets = getPresets();
+
+        let presetsHtml = '';
+        presets.forEach(preset => {
+            const displayName = preset.name || `${formatCurrency(parseFloat(preset.amount))}`;
+            // Store preset details as data attributes for custom tooltip
+            const escapeAttr = (str) => (str || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+            presetsHtml += `
+                <div class="fluz-preset-chip"
+                     data-preset-id="${preset.id}"
+                     data-amount="${escapeAttr(preset.amount)}"
+                     data-quantity="${escapeAttr(preset.quantity)}"
+                     data-destination="${escapeAttr(preset.destination)}"
+                     data-source="${escapeAttr(preset.fundingSource)}"
+                     data-category="${escapeAttr(preset.giftCardCategory)}"
+                     style="
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 10px;
+                    background: linear-gradient(135deg, #f8f8f8 0%, #fff 100%);
+                    border: 1px solid #E7E5E4;
+                    border-radius: 20px;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: #1A0000;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                ">
+                    <span class="fluz-preset-name">${displayName}</span>
+                    <span class="fluz-preset-delete" data-preset-id="${preset.id}" style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 50%;
+                        background: transparent;
+                        color: #999;
+                        font-size: 12px;
+                        line-height: 1;
+                        transition: all 0.15s;
+                    ">&times;</span>
+                </div>
+            `;
+        });
+
+        return `
+            <div id="fluz-preset-bar" style="
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 16px;
+                padding: 12px;
+                background: linear-gradient(135deg, #fafafa 0%, #f5f5f4 100%);
+                border-radius: 10px;
+                border: 1px solid #E7E5E4;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            ">
+                <div style="
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding-right: 10px;
+                    border-right: 1px solid #E7E5E4;
+                    flex-shrink: 0;
+                ">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#787571" stroke-width="2">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                        <polyline points="17 21 17 13 7 13 7 21"/>
+                        <polyline points="7 3 7 8 15 8"/>
+                    </svg>
+                    <span style="font-size: 12px; font-weight: 600; color: #787571; text-transform: uppercase; letter-spacing: 0.5px;">Presets</span>
+                </div>
+
+                <div id="fluz-presets-container" style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex: 1;
+                    overflow-x: auto;
+                    padding: 2px 0;
+                ">
+                    ${presetsHtml || '<span style="color: #999; font-size: 13px; font-style: italic;">No saved presets</span>'}
+                </div>
+
+                <button id="fluz-save-preset-btn" style="
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    padding: 6px 12px;
+                    background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 20px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    flex-shrink: 0;
+                ">
+                    <span style="font-size: 14px; line-height: 1;">+</span> Save
+                </button>
+            </div>
+        `;
+    }
+
+    /**
+    * Shows the save preset dialog.
+    */
+    function showSavePresetDialog() {
+        const currentState = captureCurrentFormState();
+        if (!currentState) {
+            alert('Unable to capture form state. Please ensure you are on the deposit page.');
+            return;
+        }
+
+        // Create modal overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'fluz-preset-modal-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            animation: fluz-fade-in 0.2s ease;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            animation: fluz-slide-up 0.3s ease;
+        `;
+
+        const categoryLine = currentState.giftCardCategory
+            ? `<div style="font-size: 13px; color: #666; margin-bottom: 4px;">Category: <strong>${currentState.giftCardCategory}</strong></div>`
+            : '';
+        const previewInfo = `
+            <div style="font-size: 13px; color: #666; margin-bottom: 4px;">Amount: <strong>${formatCurrency(parseFloat(currentState.amount) || 0)}</strong></div>
+            <div style="font-size: 13px; color: #666; margin-bottom: 4px;">Quantity: <strong>${currentState.quantity || '1'}</strong></div>
+            <div style="font-size: 13px; color: #666; margin-bottom: 4px;">Destination: <strong>${currentState.destination || 'Not selected'}</strong></div>
+            <div style="font-size: 13px; color: #666; margin-bottom: 4px;">Source: <strong>${currentState.fundingSource || 'Not selected'}</strong></div>
+            ${categoryLine}
+        `;
+
+        modal.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <h3 style="margin: 0; font-size: 18px; font-weight: 600; color: #1A0000;">Save Preset</h3>
+                <button id="fluz-modal-close" style="
+                    background: none;
+                    border: none;
+                    font-size: 24px;
+                    color: #999;
+                    cursor: pointer;
+                    padding: 0;
+                    line-height: 1;
+                ">&times;</button>
+            </div>
+
+            <div style="
+                background: #f8f8f8;
+                border-radius: 8px;
+                padding: 12px;
+                margin-bottom: 16px;
+            ">
+                ${previewInfo}
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: #1A0000; margin-bottom: 6px;">Preset Name</label>
+                <input type="text" id="fluz-preset-name-input" placeholder="e.g., Daily Deposit, Max Transfer" style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border: 1px solid #E7E5E4;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    box-sizing: border-box;
+                    transition: border-color 0.2s;
+                " />
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button id="fluz-modal-cancel" style="
+                    flex: 1;
+                    padding: 10px;
+                    background: #f5f5f4;
+                    color: #666;
+                    border: 1px solid #E7E5E4;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                ">Cancel</button>
+                <button id="fluz-modal-save" style="
+                    flex: 1;
+                    padding: 10px;
+                    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                ">Save Preset</button>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // Add animation styles if not present
+        if (!document.getElementById('fluz-modal-styles')) {
+            const style = document.createElement('style');
+            style.id = 'fluz-modal-styles';
+            style.textContent = `
+                @keyframes fluz-fade-in {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes fluz-slide-up {
+                    from { opacity: 0; transform: translateY(20px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // Focus the input
+        const nameInput = document.getElementById('fluz-preset-name-input');
+        setTimeout(() => nameInput.focus(), 100);
+
+        // Event handlers
+        const closeModal = () => {
+            overlay.style.animation = 'fluz-fade-in 0.2s ease reverse';
+            setTimeout(() => overlay.remove(), 150);
+        };
+
+        document.getElementById('fluz-modal-close').addEventListener('click', closeModal);
+        document.getElementById('fluz-modal-cancel').addEventListener('click', closeModal);
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeModal();
+        });
+
+        document.getElementById('fluz-modal-save').addEventListener('click', () => {
+            const name = nameInput.value.trim();
+            const preset = {
+                ...currentState,
+                name: name || `${formatCurrency(parseFloat(currentState.amount))} x${currentState.quantity}`
+            };
+
+            addPreset(preset);
+            closeModal();
+            rerenderPresetBar();
+        });
+
+        // Allow Enter to save
+        nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('fluz-modal-save').click();
+            }
+        });
+    }
+
+    /**
+    * Re-renders the preset bar with updated presets.
+    */
+    function rerenderPresetBar() {
+        const existingBar = document.getElementById('fluz-preset-bar');
+        if (existingBar) {
+            const parent = existingBar.parentElement;
+            const newBar = document.createElement('div');
+            newBar.innerHTML = createPresetBarHtml();
+            parent.replaceChild(newBar.firstElementChild, existingBar);
+            attachPresetBarHandlers();
+        }
+    }
+
+    /**
+    * Shows a custom tooltip for preset chips.
+    * @param {Element} chip - The chip element.
+    * @param {MouseEvent} e - The mouse event.
+    */
+    function showPresetTooltip(chip, e) {
+        // Remove any existing tooltip
+        hidePresetTooltip();
+
+        const amount = chip.getAttribute('data-amount') || '0';
+        const quantity = chip.getAttribute('data-quantity') || '1';
+        const destination = chip.getAttribute('data-destination') || 'Not set';
+        const source = chip.getAttribute('data-source') || 'Not set';
+        const category = chip.getAttribute('data-category');
+
+        const tooltip = document.createElement('div');
+        tooltip.id = 'fluz-preset-tooltip';
+        tooltip.innerHTML = `
+            <div style="font-weight: 600; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.2);">Preset Details</div>
+            <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px;">
+                <span style="color: rgba(255,255,255,0.7);">Amount:</span><span>${formatCurrency(parseFloat(amount))}</span>
+                <span style="color: rgba(255,255,255,0.7);">Quantity:</span><span>${quantity}</span>
+                <span style="color: rgba(255,255,255,0.7);">To:</span><span>${destination}</span>
+                <span style="color: rgba(255,255,255,0.7);">From:</span><span>${source}</span>
+                ${category ? `<span style="color: rgba(255,255,255,0.7);">Category:</span><span>${category}</span>` : ''}
+            </div>
+        `;
+        tooltip.style.cssText = `
+            position: fixed;
+            background: rgba(30, 30, 30, 0.95);
+            color: white;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 10001;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            max-width: 280px;
+            backdrop-filter: blur(4px);
+        `;
+
+        document.body.appendChild(tooltip);
+
+        // Position tooltip above the chip
+        const chipRect = chip.getBoundingClientRect();
+        const tooltipRect = tooltip.getBoundingClientRect();
+        let left = chipRect.left + (chipRect.width / 2) - (tooltipRect.width / 2);
+        let top = chipRect.top - tooltipRect.height - 8;
+
+        // Keep within viewport
+        if (left < 10) left = 10;
+        if (left + tooltipRect.width > window.innerWidth - 10) {
+            left = window.innerWidth - tooltipRect.width - 10;
+        }
+        if (top < 10) {
+            top = chipRect.bottom + 8; // Show below if no room above
+        }
+
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+    }
+
+    /**
+    * Hides the preset tooltip.
+    */
+    function hidePresetTooltip() {
+        const existing = document.getElementById('fluz-preset-tooltip');
+        if (existing) existing.remove();
+    }
+
+    /**
+    * Attaches event handlers to the preset bar elements.
+    */
+    function attachPresetBarHandlers() {
+        // Save button
+        const saveBtn = document.getElementById('fluz-save-preset-btn');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', showSavePresetDialog);
+            saveBtn.addEventListener('mouseenter', () => {
+                saveBtn.style.transform = 'scale(1.05)';
+                saveBtn.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.4)';
+            });
+            saveBtn.addEventListener('mouseleave', () => {
+                saveBtn.style.transform = 'scale(1)';
+                saveBtn.style.boxShadow = 'none';
+            });
+        }
+
+        // Preset chips
+        const chips = document.querySelectorAll('.fluz-preset-chip');
+        chips.forEach(chip => {
+            chip.addEventListener('click', (e) => {
+                // Don't trigger if clicking delete button
+                if (e.target.classList.contains('fluz-preset-delete')) return;
+
+                const presetId = chip.getAttribute('data-preset-id');
+                const presets = getPresets();
+                const preset = presets.find(p => p.id === presetId);
+                if (preset) {
+                    applyPreset(preset);
+                    // Visual feedback - keep green while preset is being applied (~1200ms total)
+                    chip.style.background = 'linear-gradient(135deg, #10B981 0%, #059669 100%)';
+                    chip.style.color = 'white';
+                    setTimeout(() => {
+                        chip.style.background = 'linear-gradient(135deg, #f8f8f8 0%, #fff 100%)';
+                        chip.style.color = '#1A0000';
+                    }, 1200);
+                }
+            });
+
+            chip.addEventListener('mouseenter', (e) => {
+                chip.style.borderColor = '#3B82F6';
+                chip.style.boxShadow = '0 2px 8px rgba(59, 130, 246, 0.2)';
+                showPresetTooltip(chip, e);
+            });
+
+            chip.addEventListener('mouseleave', () => {
+                chip.style.borderColor = '#E7E5E4';
+                chip.style.boxShadow = 'none';
+                hidePresetTooltip();
+            });
+        });
+
+        // Delete buttons
+        const deleteButtons = document.querySelectorAll('.fluz-preset-delete');
+        deleteButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const presetId = btn.getAttribute('data-preset-id');
+                if (confirm('Delete this preset?')) {
+                    deletePreset(presetId);
+                    rerenderPresetBar();
+                }
+            });
+
+            btn.addEventListener('mouseenter', () => {
+                btn.style.background = '#FEE2E2';
+                btn.style.color = '#EF4444';
+            });
+
+            btn.addEventListener('mouseleave', () => {
+                btn.style.background = 'transparent';
+                btn.style.color = '#999';
+            });
+        });
+    }
 
     /**
     * Gets the saved expansion state from localStorage.
@@ -360,10 +1077,11 @@
             lastUrl = window.location.href;
             // Reset state when navigating
             fundingSourceOptions = null;
-            const existingSheet = document.querySelector('._fluz_balance_sheet');
-            if (existingSheet) {
-                existingSheet.remove();
-            }
+            // Remove both containers
+            const existingPreset = document.querySelector('._fluz_preset_container');
+            const existingAccount = document.querySelector('._fluz_account_summary');
+            if (existingPreset) existingPreset.remove();
+            if (existingAccount) existingAccount.remove();
         }
 
         // Only run on manage-money page
@@ -391,7 +1109,7 @@
 
         const props = reactProps.children.props;
         let fundingPropsAvailable = !!props;
-        let fluzBalanceSheetRendered = !!document.querySelector('[class="_fluz_balance_sheet"]');
+        let fluzBalanceSheetRendered = !!document.querySelector('._fluz_preset_container');
 
         // Render table once
         if (fundingPropsAvailable && !fluzBalanceSheetRendered) {
@@ -402,11 +1120,24 @@
                 // Get saved expansion state
                 const isExpanded = getExpansionState();
 
-                // Render table with funding options.
-                let table = document.createElement('div');
-                table.className = '_fluz_balance_sheet';
-                table.innerHTML = createAccountTableHtml(fundingSourceOptions, isExpanded);
-                depositSteps.appendChild(table);
+                // Create preset bar container (goes at top)
+                let presetContainer = document.createElement('div');
+                presetContainer.className = '_fluz_balance_sheet _fluz_preset_container';
+                presetContainer.innerHTML = createPresetBarHtml();
+
+                // Create account summary container (goes at bottom)
+                let accountContainer = document.createElement('div');
+                accountContainer.className = '_fluz_account_summary';
+                accountContainer.innerHTML = createAccountTableHtml(fundingSourceOptions, isExpanded);
+
+                // Insert preset bar at the beginning (top)
+                depositSteps.insertBefore(presetContainer, depositSteps.firstChild);
+
+                // Insert account summary at the end (bottom)
+                depositSteps.appendChild(accountContainer);
+
+                // Attach preset bar handlers
+                attachPresetBarHandlers();
 
                 // Attach click handler to header
                 const header = document.getElementById('fluz-account-header');
