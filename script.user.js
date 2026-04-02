@@ -1021,8 +1021,8 @@
         `;
         htmlString += `<div id="fluz-account-content" style="display: ${contentDisplay}; flex-direction: column; gap: 8px;">`;
 
-        // Create a card for each account
-        data.forEach(account => {
+        // Create a card for each account (hide zero-balance accounts)
+        data.filter(account => parseFloat(account.final_spend_power) !== 0).forEach(account => {
             htmlString += `
                 <div id="fluz-account-card-${account.bank_account_id}"
                      class="fluz-account-card"
