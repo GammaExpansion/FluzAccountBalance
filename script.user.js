@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      2.2.6
+// @version      2.2.7
 // @description  Show Fluz Bank Balance in table and dropdown with account management and deposit presets
 // @author       GammaExpansion
 // @match        https://fluz.app/*
@@ -36,10 +36,14 @@
 
     /**
      * Parse funding source options into readable dictionary.
+     * Skips bank accounts whose spend_power has not been populated yet
+     * (e.g. recently linked institutions still awaiting first balance refresh).
      */
     function parseFundingSourceOptions(options) {
         return options.filter(
             (option) => option.type == "BANK_ACCOUNT"
+                && option.spend_power
+                && option.spend_power.spend_power
         ).flatMap((option) => ({
             "bank_account_id": option.bank_account_id,
             "bank_institution_auth_id": option.bank_institution_auth_id,
