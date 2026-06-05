@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fluz Bank Balance
 // @namespace    fluz_balance
-// @version      2.2.7
+// @version      2.2.8
 // @description  Show Fluz Bank Balance in table and dropdown with account management and deposit presets
 // @author       GammaExpansion
 // @match        https://fluz.app/*
@@ -36,25 +36,29 @@
 
     /**
      * Parse funding source options into readable dictionary.
-     * Skips bank accounts whose spend_power has not been populated yet
-     * (e.g. recently linked institutions still awaiting first balance refresh).
+     * Includes every BANK_ACCOUNT, even those whose spend_power has not been
+     * populated yet (e.g. recently linked institutions still awaiting first
+     * balance refresh). Missing balance fields default to 0 so card rendering
+     * never throws.
      */
     function parseFundingSourceOptions(options) {
         return options.filter(
             (option) => option.type == "BANK_ACCOUNT"
-                && option.spend_power
-                && option.spend_power.spend_power
-        ).flatMap((option) => ({
-            "bank_account_id": option.bank_account_id,
-            "bank_institution_auth_id": option.bank_institution_auth_id,
-            "institution_name": option.bank_institution_auth.platform_institution_name,
-            "name": option.name,
-            "final_spend_power": option.spend_power.final_spend_power,
-            "available_spend_power": option.spend_power.spend_power.available_spend_power,
-            "last_recorded_balance": option.spend_power.spend_power.last_recorded_balance,
-            "pending_transactions": option.spend_power.spend_power.pending_transactions,
-            "spend_power": option.spend_power.spend_power.spend_power
-        }))
+        ).flatMap((option) => {
+            const sp = option.spend_power || {};
+            const spsp = sp.spend_power || {};
+            return {
+                "bank_account_id": option.bank_account_id,
+                "bank_institution_auth_id": option.bank_institution_auth_id,
+                "institution_name": option.bank_institution_auth?.platform_institution_name ?? "",
+                "name": option.name,
+                "final_spend_power": sp.final_spend_power ?? 0,
+                "available_spend_power": spsp.available_spend_power ?? 0,
+                "last_recorded_balance": spsp.last_recorded_balance ?? 0,
+                "pending_transactions": spsp.pending_transactions ?? 0,
+                "spend_power": spsp.spend_power ?? 0
+            };
+        });
     }
 
     /**
@@ -1025,8 +1029,8 @@
         `;
         htmlString += `<div id="fluz-account-content" style="display: ${contentDisplay}; flex-direction: column; gap: 8px;">`;
 
-        // Create a card for each account (hide zero-balance accounts)
-        data.filter(account => parseFloat(account.final_spend_power) !== 0).forEach(account => {
+        // Create a card for every account (all bank accounts are displayed)
+        data.forEach(account => {
             htmlString += `
                 <div id="fluz-account-card-${account.bank_account_id}"
                      class="fluz-account-card"
